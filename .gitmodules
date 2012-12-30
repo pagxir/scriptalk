@@ -1,0 +1,3 @@
+[submodule "libwait"]
+	path = libwait
+	url = git@github.com:pagxir/libwait.git
