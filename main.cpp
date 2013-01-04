@@ -33,12 +33,12 @@ struct module_stub timer_test_mod = {
 };
 
 extern struct module_stub timer_mod;
-extern struct module_stub jabber_mod;
+//extern struct module_stub jabber_mod;
 extern struct module_stub slotsock_mod;
 struct module_stub *modules_list[] = { 
 	&slotsock_mod, &timer_mod,
-	&timer_test_mod, 
-	&jabber_mod, NULL
+	&timer_test_mod, NULL,
+	//&jabber_mod, NULL
 };
 
 int main(int argc, char *argv[])
@@ -46,7 +46,7 @@ int main(int argc, char *argv[])
 	slotwait_held(0);
 	initialize_modules(modules_list);
 
-	jabber_connect("level@jabbernet.dk", "wB0BVqHI");
+	//jabber_connect("level@jabbernet.dk", "wB0BVqHI");
 	slotwait_start();
 	for ( ; slotwait_step(); ) {
 	}

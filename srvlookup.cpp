@@ -1,6 +1,8 @@
 #include <stdio.h>
+#if 0
 #include <winsock2.h>
 #include <windns.h>
+#endif
 
 #include <map>
 #include <vector>
@@ -10,6 +12,7 @@
 
 size_t srvlookup(const char *srvstr, srvlist *result)
 {
+#if 0
     PDNS_RECORD pDnsSrvRecord;
     DNS_STATUS status = DnsQuery_UTF8(srvstr, DNS_TYPE_SRV, DNS_QUERY_BYPASS_CACHE,
 	    NULL, &pDnsSrvRecord, NULL);
@@ -34,6 +37,8 @@ size_t srvlookup(const char *srvstr, srvlist *result)
     }
     DnsRecordListFree(pDnsSrvRecord, DnsFreeRecordList);
     return result->size();
+#endif
+	return 0;
 }
 
 #if 0

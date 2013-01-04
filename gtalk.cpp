@@ -2,7 +2,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
-#include <windows.h>
 
 #include <openssl/ssl.h>
 #include <openssl/bio.h>
@@ -27,6 +26,32 @@ struct xmpp_struct {
     char buffer[BUFSIZE+1];
     size_t available;
 };
+
+struct tiny_event {
+	int id;
+};
+
+char *itoa(int a, char *buf, int len)
+{
+	snprintf(buf, len, "%d", a);
+	return buf;
+}
+
+tiny_event *create_tiny_event(void)
+{
+	return NULL;
+}
+
+int wait_for_event(tiny_event *event, int timeout)
+{
+	return 0;
+}
+
+int close_event(tiny_event *event)
+{
+	return 0;
+}
+
 static void xmpp_write(const void *buff, size_t count);
 
 static char *strsplit(char *str, char chr)
@@ -215,13 +240,15 @@ fill_buffer:
 		assert (available < BUFSIZE);
         count = BIO_read(bio, buffer+available, BUFSIZE-available);
         if (count == 0) {
+			int code = errno;
 			dump(buffer, available);
-			printf("0 %d\n", WSAGetLastError());
+			printf("0 %d\n", code);
             return -1;
 		}
 		if (count == -1) {
+			int code = errno;
 			dump(buffer, available);
-			printf("-1 %d\n", WSAGetLastError());
+			printf("-1 %d\n", code);
 			return -1;
 		}
         available += count;
@@ -499,7 +526,7 @@ static IqType a2iqtype(const char *type)
 
 struct IQInfo{
     int *hResult;
-    HANDLE hEvent;
+	tiny_event *hEvent;
     TiXmlElement *hPacket;
 };
 
@@ -594,7 +621,7 @@ static int xmpp_iq_stage(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *me
 		if (g_iq_infos.find(id) != g_iq_infos.end()) {
 			*g_iq_infos[id].hPacket = *message;
 			*g_iq_infos[id].hResult = 0;
-			SetEvent(g_iq_infos[id].hEvent);
+			/* SetEvent(g_iq_infos[id].hEvent); */
 		} else { 
 			printf("incoming iq: %s\n", type);
 			message->Print(stdout, -1);
@@ -707,13 +734,13 @@ static appstr xmpp_roster()
     return reqroster;
 }
 
-static void xmpp_regiq(size_t qid, HANDLE hEvent, TiXmlElement *packet, int *result)
+static void xmpp_regiq(size_t qid, tiny_event *event, TiXmlElement *packet, int *result)
 {
     char iqbuff[256];
 	
     struct IQInfo info;
     info.hResult = result;
-    info.hEvent  = hEvent;
+    info.hEvent  = event;
     info.hPacket = packet;
 	
     g_iq_infos[itoa(qid, iqbuff, 10)] = info;
@@ -727,7 +754,7 @@ static void xmpp_unregiq(size_t qid)
 
 static void xmpp_write(const void *buff, size_t count)
 {
-    printf("xmpp_write: %s\n", buff);
+    printf("xmpp_write: %s\n", (const char *)buff);
     size_t iocnt = BIO_write(g_xmpp_bio, buff, count);
     assert(iocnt == count);
 }
@@ -739,17 +766,17 @@ int xmpp_iq_get(appstr payload, const char *target, TiXmlElement *packet)
     size_t qid = xmpp_genid();
     char buff[1024];
     if (target != NULL) {
-       	sprintf(buff, "<iq id='%d' type='get' to='%s'>", qid, target);
+       	sprintf(buff, "<iq id='%ld' type='get' to='%s'>", qid, target);
     } else {
-       	sprintf(buff, "<iq id='%d' type='get'>", qid);
+       	sprintf(buff, "<iq id='%ld' type='get'>", qid);
     }
     iqstr = appstr(buff)+payload+"</iq>";
-    HANDLE hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-    xmpp_regiq(qid, hEvent, packet, &result);
+    tiny_event *event = create_tiny_event();
+    xmpp_regiq(qid, event, packet, &result);
     xmpp_write(iqstr.c_str(), iqstr.size());
-    WaitForSingleObject(hEvent, 10000);
+	wait_for_event(event, 10000);
     xmpp_unregiq(qid);
-    CloseHandle(hEvent);
+	close_event(event);
     return result;
 }
 
@@ -759,6 +786,7 @@ int xmpp_get_roster(TiXmlElement *packet)
     return xmpp_iq_get(roster, NULL, packet);
 }
 
+#if 0
 static DWORD CALLBACK InputThread(void *param)
 {
     char buffer[1024];
@@ -859,6 +887,7 @@ static DWORD CALLBACK ProcessThread(void *param)
 	delete pSec;
 	return 0;
 }
+#endif
 
 int XmppClient(const char *jid, const char *passwd)
 {
@@ -871,19 +900,23 @@ int XmppClient(const char *jid, const char *passwd)
     char *bare = strdup(jid);
     char *user = bare, *host = NULL, *res = NULL;
     host = strsplit(bare, '@');
-    if (host == NULL)
-		host = "gmail.com";
+    if (host == NULL) {
+		char _gmail_com[] = "gmail.com";
+		host = _gmail_com;
+	}
     res  = strsplit(host, '/');
     pSec->user = user;
     pSec->domain = host;
     pSec->resource = res;
     pSec->password = strdup(passwd);
 
+#if 0
 	HANDLE hInput;
     DWORD idThread = 0;
     hInput = CreateThread(NULL, 0, ProcessThread, pSec, 0, &idThread);
 	assert(hInput);
     CloseHandle(hInput);
+#endif
     return 0;
 }
 
