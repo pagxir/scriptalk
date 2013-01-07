@@ -10,7 +10,7 @@
 static struct waitcb _timer;
 static void flush_delack(void *up)
 {
-	callout_reset(&_timer, 200);
+	callout_reset(&_timer, 20000);
 	printf("Hello World\n");
 	return;
 }
@@ -18,7 +18,7 @@ static void flush_delack(void *up)
 static void module_init(void)
 {
 	waitcb_init(&_timer, flush_delack, NULL);
-	callout_reset(&_timer, 200);
+	callout_reset(&_timer, 20000);
 	return;
 }
 
@@ -41,12 +41,14 @@ struct module_stub *modules_list[] = {
 	//&jabber_mod, NULL
 };
 
+int XmppClient(const char *jid, const char *passwd);
+
 int main(int argc, char *argv[])
 {
 	slotwait_held(0);
 	initialize_modules(modules_list);
 
-	//jabber_connect("level@jabbernet.dk", "wB0BVqHI");
+	XmppClient("level@jabbernet.dk", "wB0BVqHI");
 	slotwait_start();
 	for ( ; slotwait_step(); ) {
 	}

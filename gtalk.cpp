@@ -877,8 +877,9 @@ static DWORD CALLBACK InputThread(void *param)
     }
     return 0;
 }
+#endif
 
-static DWORD CALLBACK ProcessThread(void *param)
+static void * process_routine(void *param)
 {
 	struct xmpp_struct *pSec = (struct xmpp_struct*)param;
 	xmpp_login(pSec);
@@ -887,7 +888,6 @@ static DWORD CALLBACK ProcessThread(void *param)
 	delete pSec;
 	return 0;
 }
-#endif
 
 int XmppClient(const char *jid, const char *passwd)
 {
@@ -910,13 +910,10 @@ int XmppClient(const char *jid, const char *passwd)
     pSec->resource = res;
     pSec->password = strdup(passwd);
 
-#if 0
-	HANDLE hInput;
-    DWORD idThread = 0;
-    hInput = CreateThread(NULL, 0, ProcessThread, pSec, 0, &idThread);
-	assert(hInput);
-    CloseHandle(hInput);
-#endif
+	void *rval = 0;
+	pthread_t wid = {0};
+	pthread_create(&wid, NULL, process_routine, pSec);
+	pthread_join(wid, &rval);
     return 0;
 }
 
