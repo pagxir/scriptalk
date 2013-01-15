@@ -38,7 +38,7 @@ size_t srvlookup(const char *srvstr, srvlist *result)
     DnsRecordListFree(pDnsSrvRecord, DnsFreeRecordList);
     return result->size();
 #endif
-	result->push_back("talk.l.google.com:5223");
+	result->push_back("jabbernet.dk:5222");
 	return 1;
 }
 

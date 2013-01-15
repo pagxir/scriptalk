@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "parser.h"
 
@@ -199,7 +200,7 @@ int main(int argc, char *argv[])
 			buf[l] = 0;
 			fclose(fp);
 
-			xml_parse(&context, buf);
+			printf("%s", xml_parse(&context, buf));
 		}
 	}
 	free(buf);
