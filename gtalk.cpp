@@ -11,6 +11,7 @@
 #include <vector>
 #include <map>
 
+#include "parser.h"
 #include "tinyxml.h"
 #include "srvlookup.h"
 
@@ -25,6 +26,8 @@ struct xmpp_struct {
 	
     char buffer[BUFSIZE+1];
     size_t available;
+
+	struct xml_upp parser;
 };
 
 struct tiny_event {
@@ -177,15 +180,19 @@ static appstr xmpp_starttls()
 
 static int xmpp_seek_handshake(struct xmpp_struct *xmppdat)
 {
-    const char *p = xmppdat->buffer;
-    const char *p_end = &p[xmppdat->available];
-    while (p < p_end) {
-		if (*p++ == '>') {
-			xmppdat->available = p_end-p;
-			memmove(xmppdat->buffer, p, p_end-p+1);
-			return 0;
-		}
-    }
+    char *p = xmppdat->buffer;
+    char *p_end = &p[xmppdat->available];
+
+	*p_end = 0;
+	xmppdat->parser.error = 0;
+	p = (char *)tag_begin(&xmppdat->parser, p);
+
+	if (xmppdat->parser.error == 0) {
+		xmppdat->available = p_end - p;
+		memmove(xmppdat->buffer, p, p_end - p + 1);
+		return 0;
+	}
+
     return -1;
 }
 
@@ -196,10 +203,14 @@ static int xmpp_read_handshake(BIO *bio, struct xmpp_struct *xmppdat)
     do {
 		assert(BUFSIZE>available);
        	int count = BIO_read(bio, buffer+available, BUFSIZE-available);
-		if (count == 0)
+		if (count == 0) {
+			printf("error\n");
 			return -1;
-		if (count == -1)
+		}
+		if (count == -1) {
+			printf("error failure\n");
 			return -1;
+		}
 		available += count;
 		xmppdat->available = available;
     } while(xmpp_seek_handshake(xmppdat));
@@ -242,22 +253,25 @@ fill_buffer:
         if (count == 0) {
 			int code = errno;
 			dump(buffer, available);
-			printf("0 %d\n", code);
             return -1;
 		}
 		if (count == -1) {
 			int code = errno;
 			dump(buffer, available);
-			printf("-1 %d\n", code);
 			return -1;
 		}
         available += count;
-        buffer[available] = 0;
+        buffer[available] = ' ';
+        buffer[available + 1] = 0;
 		assert (available <= BUFSIZE);
 		xmppdat->available = available;
+
         p = parser.Parse(buffer, NULL, TIXML_ENCODING_UTF8);
+		printf("LINE failure: %p\n", p);
+		parser.Print(stderr, -1);
         if (p == NULL)
             continue;
+		printf("LINE success: %p\n", p);
 		*packet = parser;
         available -= (p-buffer);
 		assert (available <= BUFSIZE);
@@ -280,17 +294,20 @@ static int xmpp_tls_stage(BIO *bio, struct xmpp_struct *xmppdat)
 		return -1;
     }
 	
+	printf("L\n");
     TiXmlElement packet("");
     if (xmpp_read_packet(bio, xmppdat, &packet) != 0) {
 		assert(0);
 		return -1;
     }
+	printf("LO\n");
 	
     appstr starttls = xmpp_starttls();
     count = BIO_write(bio, starttls.c_str(), starttls.size());
     assert(count == starttls.size());
 	
     TiXmlElement proceed("");
+	printf("LL\n");
     if (xmpp_read_packet(bio, xmppdat, &proceed) != 0) {
 		assert(0);
 		return -1;
@@ -647,18 +664,22 @@ static int xmpp_stage(struct xmpp_struct *xmppdat, const char *service)
     }
     assert(xmppdat != NULL);
     xmppdat->available = 0;
+	memset(&xmppdat->parser, 0, sizeof(xmppdat->parser));
     if (xmpp_tls_stage(bio, xmppdat) != 0){
 		assert(0);
 		return -1;
     }
+	printf("LLLL\n");
     if (bio_tls_set(&bio) != 0) {
 		assert(0);
 		return -1;
     }
+	printf("LLLLL\n");
     if (xmpp_sasl_stage(bio, xmppdat) != 0){
 		assert(0);
 		return -1;
     }
+	printf("LKLLLL\n");
     if (xmpp_session_stage(bio, xmppdat) != 0){
 		assert(0);
 		return -1;
