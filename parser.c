@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "parser.h"
+
 #define RETRUN_IF_INVAL(p)	\
 	do {					\
 		if (p == NULL		\
@@ -15,11 +17,8 @@
 			return p;		\
 	} while ( 0 )
 
-struct xml_upp {
-	int last_type;
-};
-
-int istext(int code)
+static int
+istext(int code)
 {
 	if (code == '<')
 		return 0;
@@ -30,7 +29,8 @@ int istext(int code)
 	return 1;
 }
 
-int isattr(int code)
+static int
+isattr(int code)
 {
 	switch (code) {
 		case ':':
@@ -45,7 +45,7 @@ int isattr(int code)
 	return 1;
 }
 
-const char *
+static const char *
 bar_skip(const char *str)
 {
 	RETRUN_IF_NULL(str);
@@ -53,7 +53,7 @@ bar_skip(const char *str)
 	return str - 1;
 }
 
-const char *
+static const char *
 attr_skip(const char *str)
 {
 	RETRUN_IF_NULL(str);
@@ -74,7 +74,7 @@ attr_skip(const char *str)
 	return str - 1;
 }
 
-const char *
+static const char *
 name_skip(const char *str)
 {
 	RETRUN_IF_NULL(str);
@@ -82,7 +82,7 @@ name_skip(const char *str)
 	return str - 1;
 }
 
-const char *
+static const char *
 text_skip(const char *str)
 {
 	RETRUN_IF_NULL(str);
@@ -98,8 +98,10 @@ tag_begin(struct xml_upp *up, const char *xmlstr)
 	RETRUN_IF_INVAL(xmlstr);
 	str = bar_skip(xmlstr);
 
-	if (*str != '<')
+	if (*str != '<') {
+		up->error = 1;
 		return str;
+	}
 
 	str = name_skip(++str);
 	str = attr_skip(str);
@@ -110,8 +112,10 @@ tag_begin(struct xml_upp *up, const char *xmlstr)
 		str++;
 	}
 
-	if (*str != '>')
+	if (*str != '>') {
+		up->error = 1;
 		return str;
+	}
 
 	up->last_type = type;
 	return ++str;
@@ -125,17 +129,23 @@ tag_end(struct xml_upp *up, const char *xmlstr)
 
 	str = bar_skip(xmlstr);
 
-	if (*str != '<')
+	if (*str != '<') {
+		up->error = 1;
 		return str;
+	}
 
-	if (*++str != '/')
+	if (*++str != '/') {
+		up->error = 1;
 		return str;
+	}
 
 	str = name_skip(++str);
 	str = bar_skip(str);
 
-	if (*str != '>')
+	if (*str != '>') {
+		up->error = 1;
 		return str;
+	}
 
 	return ++str;
 }
@@ -152,21 +162,28 @@ xml_parse(struct xml_upp *up, const char *xmlstr)
 	str = tag_begin(up, str);
 
 	if (up->last_type == 1) {
-		while (*str) {
-			str = text_skip(str);
-			if (str[0] == '<' && str[1] == '/') {
-				str = tag_end(up, str);
-				break;
-			}
+		str = text_skip(str);
+
+		up->last_level++;
+		while (*str && !is_tag_end(str)) {
 			str = xml_parse(up, str);
+			if (up->error)
+				return str;
+			str = text_skip(str);
+		}
+
+		if (is_tag_end(str)) {
+			str = tag_end(up, str);
+			up->last_level--;
+			up->error = 0;
 		}
 	}
 
 	return str;
 }
 
-int
-main(int argc, char *argv[])
+#ifndef _USE_LIB_
+int main(int argc, char *argv[])
 {
 	int i;
 	char *buf;
@@ -188,4 +205,5 @@ main(int argc, char *argv[])
 	free(buf);
 	return 0;
 }
+#endif
 
