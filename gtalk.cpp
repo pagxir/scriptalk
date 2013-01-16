@@ -24,8 +24,8 @@ struct xmpp_struct {
     const char *resource;
     const char *password;
 	
-    char buffer[BUFSIZE+1];
     size_t available;
+    char buffer[BUFSIZE + 1];
 
 	struct xml_upp parser;
 };
@@ -52,6 +52,33 @@ int wait_for_event(tiny_event *event, int timeout)
 
 int close_event(tiny_event *event)
 {
+	return 0;
+}
+
+static int fill_buffer(struct xmpp_struct *up, BIO *iop)
+{
+	char *buffer = xmppdat->buffer;
+    size_t available = xmppdat->available = 0;
+
+    do {
+		assert(BUFSIZE>available);
+       	int count = BIO_read(bio, buffer+available, BUFSIZE-available);
+		if (count == 0) {
+			printf("error\n");
+			return -1;
+		}
+
+		if (count == -1) {
+			printf("error failure\n");
+			return -1;
+		}
+		buffer[available + count] = 0;
+		fprintf(stderr, "[TRACE-RX] %s\n", buffer + available);
+		available += count;
+		xmppdat->available = available;
+    } while(xmpp_seek_handshake(xmppdat));
+    buffer[available] = 0;
+
 	return 0;
 }
 
@@ -196,6 +223,47 @@ static int xmpp_seek_handshake(struct xmpp_struct *xmppdat)
     return -1;
 }
 
+static int proxy_seek_handshake(struct xmpp_struct *xmppdat)
+{
+	char *s;
+    char *p = xmppdat->buffer;
+
+	s = strstr(p, "\r\n\r\n");
+	if (s != NULL) {
+		s += 4;
+		xmppdat->available = (s - p);
+		memmove(xmppdat->buffer, s, s - p + 1);
+		return 0;
+	}
+
+    return -1;
+}
+
+static int proxy_read_handshake(BIO *bio, struct xmpp_struct *xmppdat)
+{
+    char *buffer = xmppdat->buffer;
+    size_t available = xmppdat->available = 0;
+    do {
+		assert(BUFSIZE>available);
+       	int count = BIO_read(bio, buffer+available, BUFSIZE-available);
+		if (count == 0) {
+			printf("error\n");
+			return -1;
+		}
+
+		if (count == -1) {
+			printf("error failure\n");
+			return -1;
+		}
+		buffer[available + count] = 0;
+		fprintf(stderr, "[PROXY-RX] %s\n", buffer + available);
+		available += count;
+		xmppdat->available = available;
+    } while(proxy_seek_handshake(xmppdat));
+    buffer[available] = 0;
+    return 0;
+}
+
 static int xmpp_read_handshake(BIO *bio, struct xmpp_struct *xmppdat)
 {
     char *buffer = xmppdat->buffer;
@@ -207,10 +275,13 @@ static int xmpp_read_handshake(BIO *bio, struct xmpp_struct *xmppdat)
 			printf("error\n");
 			return -1;
 		}
+
 		if (count == -1) {
 			printf("error failure\n");
 			return -1;
 		}
+		buffer[available + count] = 0;
+		fprintf(stderr, "[TRACE-RX] %s\n", buffer + available);
 		available += count;
 		xmppdat->available = available;
     } while(xmpp_seek_handshake(xmppdat));
@@ -653,15 +724,31 @@ static int xmpp_iq_stage(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *me
 
 static int xmpp_stage(struct xmpp_struct *xmppdat, const char *service)
 {
-    BIO *bio = BIO_new_connect((char*)service);
+	int len;
+	int sent;
+	char buf[512];
+	char proxy_server[] = "192.168.42.129:1800";
+	char jabber_server[] = "alt1.xmpp.l.google.com:5222";
+
+    BIO *bio = BIO_new_connect(proxy_server);
     if (bio == NULL) {
-		printf("BIO_new_connect failed!\n");
+		fprintf(stderr, "BIO_new_connect failed!\n");
 		return 0;
     }
+
     if (BIO_do_connect(bio) <= 0) {
-		printf("BIO_do_connect failed!\n");
+		fprintf(stderr, "BIO_do_connect failed!\n");
 		BIO_free_all(bio);
+		return 0;
     }
+
+	len = sprintf(buf, "CONNECT %s HTTP/1.0\r\n\r\n", jabber_server);
+	fprintf(stderr, "[PROXY-TX] %s\n", buf);
+	sent = BIO_write(bio, buf, len);
+	assert(sent == len);
+
+	proxy_read_handshake(bio, xmppdat);
+
     assert(xmppdat != NULL);
     xmppdat->available = 0;
 	memset(&xmppdat->parser, 0, sizeof(xmppdat->parser));
@@ -669,11 +756,13 @@ static int xmpp_stage(struct xmpp_struct *xmppdat, const char *service)
 		assert(0);
 		return -1;
     }
+
 	printf("LLLL\n");
     if (bio_tls_set(&bio) != 0) {
 		assert(0);
 		return -1;
     }
+
 	printf("LLLLL\n");
     if (xmpp_sasl_stage(bio, xmppdat) != 0){
 		assert(0);
