@@ -19,38 +19,51 @@
 	} while ( 0 )
 
 static int
-istext(int code)
+char_inset(int dot, const char *s)
 {
-	if (code == '<')
+	int sel;
+	int neg = 1;
+
+	if (*s++ != '[')
 		return 0;
 
-	if (code == '\0')
-		return 0;
-
-	return 1;
-}
-
-static int
-isattr(int code)
-{
-	switch (code) {
-		case ':':
-		case '=':
-		case ' ':
-			break;
-
-		default:
-			return isalnum(code);
+	if (*s == '^') {
+		neg = 0;
+		s++;
 	}
 
-	return 1;
+	while (*s && *s != ']') {
+		if (strncmp("A-Z", s, 3) == 0) {
+			if (dot >= 'A' && dot <= 'Z') {
+				return neg;
+			}
+			s += 3;
+		} else if (strncmp("a-z", s, 3) == 0) {
+			if (dot >= 'a' && dot <= 'z') {
+				return neg;
+			}
+			s += 3;
+		} else if (strncmp("0-9", s, 3) == 0) {
+			if (dot >= '0' && dot <= '9') {
+				return neg;
+			}
+			s += 3;
+		} else {
+			if (*s == dot) {
+				return neg;
+			}
+			s++;
+		}
+	}
+
+	return !neg;
 }
 
 static const char *
 bar_skip(const char *str)
 {
 	RETRUN_IF_NULL(str);
-	while (*str++ == ' ');
+	while (char_inset(*str++, "[\r\n ]"));
 	return str - 1;
 }
 
@@ -58,9 +71,10 @@ static const char *
 attr_skip(const char *str)
 {
 	RETRUN_IF_NULL(str);
+
 	do {
 		int bar;
-		while (isattr(*str++));
+		while (char_inset(*str++, "[A-Za-z0-9:= ]"));
 
 		bar = str[-1];
 		if (bar == '\"' || bar == '\'') {
@@ -79,7 +93,7 @@ static const char *
 name_skip(const char *str)
 {
 	RETRUN_IF_NULL(str);
-	while (isalnum(*str++));
+	while (char_inset(*str++, "[A-Za-z0-9:]"));
 	return str - 1;
 }
 
@@ -87,7 +101,7 @@ static const char *
 text_skip(const char *str)
 {
 	RETRUN_IF_NULL(str);
-	while (istext(*str++));
+	while (char_inset(*str++, "[^<]"));
 	return str - 1;
 }
 
@@ -207,6 +221,7 @@ xml_parse(struct xml_upp *up, const char *xmlstr)
 const char *
 doc_parse(struct xml_upp *up, const char *xmlstr)
 {
+	xmlstr = bar_skip(xmlstr);
 	xmlstr = dec_parse(up, xmlstr);
 	if (up->error)
 		return xmlstr;
@@ -230,7 +245,8 @@ int main(int argc, char *argv[])
 			buf[l] = 0;
 			fclose(fp);
 
-			printf("%s", doc_parse(&context, buf));
+			printf("[XML]: %s", doc_parse(&context, buf));
+			printf("error %d\n", context.error);
 		}
 	}
 	free(buf);
