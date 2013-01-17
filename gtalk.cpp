@@ -210,6 +210,12 @@ static int xmpp_seek_handshake(struct xmpp_struct *xmppdat)
 
 	*p_end = 0;
 	xmppdat->parser.error = 0;
+
+	p = (char *)dec_parse(&xmppdat->parser, p);
+	if (xmppdat->parser.error != 0) {
+		return -1;
+	}
+
 	p = (char *)tag_begin(&xmppdat->parser, p);
 
 	if (xmppdat->parser.error == 0) {

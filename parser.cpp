@@ -92,6 +92,27 @@ text_skip(const char *str)
 }
 
 const char *
+dec_parse(struct xml_upp *up, const char *xmlstr)
+{
+	const char *str;
+
+	str = xmlstr;
+	if (strncmp(str, "<?", 2))
+		return xmlstr;
+
+	str = name_skip(str + 2);
+	str = attr_skip(str);
+	str = bar_skip(str);
+
+	if (strncmp(str, "?>", 2)) {
+		up->error = 1;
+		return str;
+	}
+
+	return (str + 2);
+}
+
+const char *
 tag_begin(struct xml_upp *up, const char *xmlstr)
 {
 	int type = 1;
@@ -183,6 +204,15 @@ xml_parse(struct xml_upp *up, const char *xmlstr)
 	return str;
 }
 
+const char *
+doc_parse(struct xml_upp *up, const char *xmlstr)
+{
+	xmlstr = dec_parse(up, xmlstr);
+	if (up->error)
+		return xmlstr;
+	return xml_parse(up, xmlstr);
+}
+
 #ifndef _USE_LIB_
 int main(int argc, char *argv[])
 {
@@ -200,7 +230,7 @@ int main(int argc, char *argv[])
 			buf[l] = 0;
 			fclose(fp);
 
-			printf("%s", xml_parse(&context, buf));
+			printf("%s", doc_parse(&context, buf));
 		}
 	}
 	free(buf);
