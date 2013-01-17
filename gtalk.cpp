@@ -17,6 +17,7 @@
 
 #define BUFSIZE 65536
 typedef unsigned char uint8_t;
+const char *LOG_TAG = "UNKOWN";
 
 struct xmpp_struct {
     const char *user;
@@ -57,28 +58,25 @@ int close_event(tiny_event *event)
 
 static int fill_buffer(struct xmpp_struct *up, BIO *iop)
 {
-	char *buffer = xmppdat->buffer;
-    size_t available = xmppdat->available = 0;
+	int len;
+	char *buf = up->buffer;
+	size_t avail = up->available;
 
-    do {
-		assert(BUFSIZE>available);
-       	int count = BIO_read(bio, buffer+available, BUFSIZE-available);
-		if (count == 0) {
-			printf("error\n");
-			return -1;
-		}
+	assert(BUFSIZE > avail);
+	len = BIO_read(iop, buf + avail, BUFSIZE - avail);
+	if (len == 0) {
+		fprintf(stderr, "BIO_read error\n");
+		return -1;
+	}
 
-		if (count == -1) {
-			printf("error failure\n");
-			return -1;
-		}
-		buffer[available + count] = 0;
-		fprintf(stderr, "[TRACE-RX] %s\n", buffer + available);
-		available += count;
-		xmppdat->available = available;
-    } while(xmpp_seek_handshake(xmppdat));
-    buffer[available] = 0;
+	if (len == -1) {
+		fprintf(stderr, "BIO_read failure\n");
+		return -1;
+	}
 
+	buf[avail + len] = 0;
+	up->available = (avail + len);
+	fprintf(stderr, "[%s] %s\n", LOG_TAG, buf + avail);
 	return 0;
 }
 
@@ -241,51 +239,25 @@ static int proxy_seek_handshake(struct xmpp_struct *xmppdat)
 
 static int proxy_read_handshake(BIO *bio, struct xmpp_struct *xmppdat)
 {
-    char *buffer = xmppdat->buffer;
-    size_t available = xmppdat->available = 0;
-    do {
-		assert(BUFSIZE>available);
-       	int count = BIO_read(bio, buffer+available, BUFSIZE-available);
-		if (count == 0) {
-			printf("error\n");
-			return -1;
-		}
+	LOG_TAG = "PROXY-RX";
 
-		if (count == -1) {
-			printf("error failure\n");
+    do {
+		if (fill_buffer(xmppdat, bio) != 0)
 			return -1;
-		}
-		buffer[available + count] = 0;
-		fprintf(stderr, "[PROXY-RX] %s\n", buffer + available);
-		available += count;
-		xmppdat->available = available;
-    } while(proxy_seek_handshake(xmppdat));
-    buffer[available] = 0;
+    } while (proxy_seek_handshake(xmppdat));
+
     return 0;
 }
 
 static int xmpp_read_handshake(BIO *bio, struct xmpp_struct *xmppdat)
 {
-    char *buffer = xmppdat->buffer;
-    size_t available = xmppdat->available = 0;
-    do {
-		assert(BUFSIZE>available);
-       	int count = BIO_read(bio, buffer+available, BUFSIZE-available);
-		if (count == 0) {
-			printf("error\n");
-			return -1;
-		}
+	LOG_TAG = "TRACE-RX";
 
-		if (count == -1) {
-			printf("error failure\n");
+    do {
+		if (fill_buffer(xmppdat, bio) != 0)
 			return -1;
-		}
-		buffer[available + count] = 0;
-		fprintf(stderr, "[TRACE-RX] %s\n", buffer + available);
-		available += count;
-		xmppdat->available = available;
-    } while(xmpp_seek_handshake(xmppdat));
-    buffer[available] = 0;
+    } while (xmpp_seek_handshake(xmppdat));
+
     return 0;
 }
 
@@ -728,7 +700,8 @@ static int xmpp_stage(struct xmpp_struct *xmppdat, const char *service)
 	int sent;
 	char buf[512];
 	char proxy_server[] = "192.168.42.129:1800";
-	char jabber_server[] = "alt1.xmpp.l.google.com:5222";
+	/* char jabber_server[] = "alt1.xmpp.l.google.com:5222"; */
+	char jabber_server[] = "jabbernet.dk:5222";
 
     BIO *bio = BIO_new_connect(proxy_server);
     if (bio == NULL) {
