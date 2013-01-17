@@ -10,7 +10,7 @@
 
 #include "srvlookup.h"
 
-size_t srvlookup(const char *srvstr, srvlist *result)
+int srvlookup(const char *srvstr, srvlist *result)
 {
 #if 0
     PDNS_RECORD pDnsSrvRecord;
