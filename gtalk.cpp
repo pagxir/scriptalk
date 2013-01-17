@@ -17,7 +17,12 @@
 
 #define BUFSIZE 65536
 typedef unsigned char uint8_t;
-const char *LOG_TAG = "UNKOWN";
+
+static int LOG_WAY = 0;
+static const char *LOG_TAG = "UNKOWN";
+enum {LOG_NONE, LOG_IN, LOG_OUT};
+
+static void flushout(BIO *iop, const void *buf, size_t len);
 
 struct xmpp_struct {
     const char *user;
@@ -56,7 +61,7 @@ int close_event(tiny_event *event)
 	return 0;
 }
 
-static int fill_buffer(struct xmpp_struct *up, BIO *iop)
+static int fillin(struct xmpp_struct *up, BIO *iop)
 {
 	int len;
 	char *buf = up->buffer;
@@ -76,11 +81,15 @@ static int fill_buffer(struct xmpp_struct *up, BIO *iop)
 
 	buf[avail + len] = 0;
 	up->available = (avail + len);
-	fprintf(stderr, "[%s] %s\n", LOG_TAG, buf + avail);
+
+	if (LOG_WAY != LOG_IN) {
+		fprintf(stderr, "\n[%s-RX]: ", LOG_TAG);
+		LOG_WAY = LOG_IN;
+	}
+
+	fprintf(stderr, "%.*s", len, buf + avail);
 	return 0;
 }
-
-static void xmpp_write(const void *buff, size_t count);
 
 static char *strsplit(char *str, char chr)
 {
@@ -203,66 +212,66 @@ static appstr xmpp_starttls()
     return starttls;
 }
 
-static int xmpp_seek_handshake(struct xmpp_struct *xmppdat)
+static int xmpp_seek_handshake(struct xmpp_struct *up)
 {
-    char *p = xmppdat->buffer;
-    char *p_end = &p[xmppdat->available];
+    char *p = up->buffer;
+    char *p_end = &p[up->available];
 
 	*p_end = 0;
-	xmppdat->parser.error = 0;
+	up->parser.error = 0;
 
-	p = (char *)dec_parse(&xmppdat->parser, p);
-	if (xmppdat->parser.error != 0) {
+	p = (char *)dec_parse(&up->parser, p);
+	if (up->parser.error != 0) {
 		return -1;
 	}
 
-	p = (char *)tag_begin(&xmppdat->parser, p);
+	p = (char *)tag_begin(&up->parser, p);
 
-	if (xmppdat->parser.error == 0) {
-		xmppdat->available = p_end - p;
-		memmove(xmppdat->buffer, p, p_end - p + 1);
+	if (up->parser.error == 0) {
+		up->available = p_end - p;
+		memmove(up->buffer, p, p_end - p + 1);
 		return 0;
 	}
 
     return -1;
 }
 
-static int proxy_seek_handshake(struct xmpp_struct *xmppdat)
+static int proxy_seek_handshake(struct xmpp_struct *up)
 {
 	char *s;
-    char *p = xmppdat->buffer;
+    char *p = up->buffer;
 
 	s = strstr(p, "\r\n\r\n");
 	if (s != NULL) {
 		s += 4;
-		xmppdat->available = (s - p);
-		memmove(xmppdat->buffer, s, s - p + 1);
+		up->available = (s - p);
+		memmove(up->buffer, s, s - p + 1);
 		return 0;
 	}
 
     return -1;
 }
 
-static int proxy_read_handshake(BIO *bio, struct xmpp_struct *xmppdat)
+static int proxy_read_handshake(BIO *bio, struct xmpp_struct *up)
 {
-	LOG_TAG = "PROXY-RX";
+	LOG_TAG = "PROXY";
 
     do {
-		if (fill_buffer(xmppdat, bio) != 0)
+		if (fillin(up, bio) != 0)
 			return -1;
-    } while (proxy_seek_handshake(xmppdat));
+    } while (proxy_seek_handshake(up));
 
     return 0;
 }
 
-static int xmpp_read_handshake(BIO *bio, struct xmpp_struct *xmppdat)
+static int xmpp_read_handshake(BIO *bio, struct xmpp_struct *up)
 {
-	LOG_TAG = "TRACE-RX";
+	LOG_TAG = "TRACE";
 
     do {
-		if (fill_buffer(xmppdat, bio) != 0)
+		if (fillin(up, bio) != 0)
 			return -1;
-    } while (xmpp_seek_handshake(xmppdat));
+    } while (xmpp_seek_handshake(up));
 
     return 0;
 }
@@ -276,27 +285,27 @@ static void dump(const char *p, size_t count)
     printf("\n------------------\n");
 }
 
-static int xmpp_read_packet(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *packet)
+static int xmpp_read_packet(BIO *bio, struct xmpp_struct *up, TiXmlElement *packet)
 {
     int count = 0;
     const char *p = NULL;
-    assert(xmppdat != NULL);
-    char *buffer = xmppdat->buffer;
+    assert(up != NULL);
+    char *buffer = up->buffer;
 	
     TiXmlElement parser("");
     p = parser.Parse(buffer, NULL, TIXML_ENCODING_UTF8);
     if (p == NULL)
         goto fill_buffer;
     *packet = parser;
-    assert (xmppdat->available <= BUFSIZE);
-    xmppdat->available -= (p-buffer);
-    memmove(buffer, p, xmppdat->available+1);
+    assert (up->available <= BUFSIZE);
+    up->available -= (p-buffer);
+    memmove(buffer, p, up->available+1);
     return 0;
 	
 fill_buffer:
     for (;;) {
        	TiXmlElement parser("");
-		size_t available = xmppdat->available;
+		size_t available = up->available;
 		assert (available < BUFSIZE);
         count = BIO_read(bio, buffer+available, BUFSIZE-available);
         if (count == 0) {
@@ -313,64 +322,57 @@ fill_buffer:
         buffer[available] = ' ';
         buffer[available + 1] = 0;
 		assert (available <= BUFSIZE);
-		xmppdat->available = available;
+		up->available = available;
 
         p = parser.Parse(buffer, NULL, TIXML_ENCODING_UTF8);
-		printf("LINE failure: %p\n", p);
 		parser.Print(stderr, -1);
         if (p == NULL)
             continue;
-		printf("LINE success: %p\n", p);
 		*packet = parser;
         available -= (p-buffer);
 		assert (available <= BUFSIZE);
-		xmppdat->available = available;
+		up->available = available;
         memmove(buffer, p, available+1);
         return 0;
     }
     return -1;
 }
 
-static int xmpp_tls_stage(BIO *bio, struct xmpp_struct *xmppdat)
+static int xmpp_tls_stage(BIO *bio, struct xmpp_struct *up)
 {
-    appstr handshake = xmpp_handshake(xmppdat->domain);
-    size_t count = BIO_write(bio, handshake.c_str(), handshake.size());
-    assert(count == handshake.size());
+    appstr handshake = xmpp_handshake(up->domain);
+	flushout(bio, handshake.c_str(), handshake.size());
 	
-    xmppdat->available = 0;
-    if (xmpp_read_handshake(bio, xmppdat) != 0) {
+    up->available = 0;
+    if (xmpp_read_handshake(bio, up) != 0) {
 		assert(0);
 		return -1;
     }
 	
-	printf("L\n");
     TiXmlElement packet("");
-    if (xmpp_read_packet(bio, xmppdat, &packet) != 0) {
+    if (xmpp_read_packet(bio, up, &packet) != 0) {
 		assert(0);
 		return -1;
     }
-	printf("LO\n");
 	
     appstr starttls = xmpp_starttls();
-    count = BIO_write(bio, starttls.c_str(), starttls.size());
-    assert(count == starttls.size());
+	flushout(bio, starttls.c_str(), starttls.size());
 	
     TiXmlElement proceed("");
-	printf("LL\n");
-    if (xmpp_read_packet(bio, xmppdat, &proceed) != 0) {
+    if (xmpp_read_packet(bio, up, &proceed) != 0) {
 		assert(0);
 		return -1;
     }
     return 0;
 }
 
-static appstr xmpp_sasl(struct xmpp_struct *xmppdat)
+static appstr xmpp_sasl(struct xmpp_struct *up)
 {
     appstr sasl;
     char b64buff[1024];
     int count = sprintf(b64buff, "@%s@%s",
-		xmppdat->user, xmppdat->password);
-    b64buff[strlen(xmppdat->user)+1] = b64buff[0] = 0;
+		up->user, up->password);
+    b64buff[strlen(up->user)+1] = b64buff[0] = 0;
 	
     sasl = "<auth mechanism='PLAIN' xmlns='urn:ietf:params:xml:ns:xmpp-sasl'>";
     sasl += bin2B64str(b64buff, count);
@@ -378,12 +380,12 @@ static appstr xmpp_sasl(struct xmpp_struct *xmppdat)
     return sasl;
 }
 
-static appstr xmpp_bind(struct xmpp_struct *xmppdat)
+static appstr xmpp_bind(struct xmpp_struct *up)
 {
     appstr bind("<bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/>");
-    if (xmppdat->resource && xmppdat->resource[0]) {
+    if (up->resource && up->resource[0]) {
 		bind =  "<bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'><resource>";
-		bind += xmppdat->resource;
+		bind += up->resource;
 		bind += "</resource></bind>";
     }
     appstr reqbind = "<iq id='bind0' type='set'>";
@@ -392,7 +394,7 @@ static appstr xmpp_bind(struct xmpp_struct *xmppdat)
     return reqbind;
 }
 
-static appstr xmpp_session(struct xmpp_struct *xmppdat)
+static appstr xmpp_session(struct xmpp_struct *up)
 {
     appstr session;
     session = "<iq id='1' type='set'>";
@@ -401,30 +403,28 @@ static appstr xmpp_session(struct xmpp_struct *xmppdat)
     return session;
 }
 
-static int xmpp_sasl_stage(BIO *bio, struct xmpp_struct *xmppdat)
+static int xmpp_sasl_stage(BIO *bio, struct xmpp_struct *up)
 {
-    appstr handshake = xmpp_handshake(xmppdat->domain);
-    size_t count = BIO_write(bio, handshake.c_str(), handshake.size());
-    assert(count == handshake.size());
+    appstr handshake = xmpp_handshake(up->domain);
+	flushout(bio, handshake.c_str(), handshake.size());
 	
-    xmppdat->available = 0;
-    if (xmpp_read_handshake(bio, xmppdat) != 0) {
+    up->available = 0;
+    if (xmpp_read_handshake(bio, up) != 0) {
 		assert(0);
 		return -1;
     }
 	
     TiXmlElement packet("");
-    if (xmpp_read_packet(bio, xmppdat, &packet) != 0) {
+    if (xmpp_read_packet(bio, up, &packet) != 0) {
 		assert(0);
 		return -1;
     }
 	
-    appstr sasl = xmpp_sasl(xmppdat);
-    count = BIO_write(bio, sasl.c_str(), sasl.size());
-    assert(count == sasl.size());
-	
+    appstr sasl = xmpp_sasl(up);
+	flushout(bio, sasl.c_str(), sasl.size());
+
     TiXmlElement authresult("");
-    if (xmpp_read_packet(bio, xmppdat, &authresult) != 0) {
+    if (xmpp_read_packet(bio, up, &authresult) != 0) {
 		assert(0);
 		return -1;
     }
@@ -439,37 +439,37 @@ static int bio_tls_set(BIO **bio)
 {
     BIO *rawio = *bio;
     *bio = BIO_new_ssl(xmpp_tlsctx(), 1);
+
     BIO_push(*bio, rawio);
     if (BIO_do_handshake(*bio) <= 0) {
-        printf("hand shake fail\n");
+        fprintf(stderr, "hand shake fail\n");
         return -1;
     }
+
     return 0;
 }
 
-static int xmpp_session_stage(BIO *bio, struct xmpp_struct *xmppdat)
+static int xmpp_session_stage(BIO *bio, struct xmpp_struct *up)
 {
-    appstr handshake = xmpp_handshake(xmppdat->domain);
-    size_t count = BIO_write(bio, handshake.c_str(), handshake.size());
-    assert(count == handshake.size());
-	
-    if (xmpp_read_handshake(bio, xmppdat) != 0) {
+    appstr handshake = xmpp_handshake(up->domain);
+	flushout(bio, handshake.c_str(), handshake.size());
+
+    if (xmpp_read_handshake(bio, up) != 0) {
 		assert(0);
 		return -1;
     }
 	
     TiXmlElement packet("");
-    if (xmpp_read_packet(bio, xmppdat, &packet) != 0) {
+    if (xmpp_read_packet(bio, up, &packet) != 0) {
 		assert(0);
 		return -1;
     }
 	
-    appstr bind = xmpp_bind(xmppdat);
-    count = BIO_write(bio, bind.c_str(), bind.size());
-    assert(count == bind.size());
+    appstr bind = xmpp_bind(up);
+    flushout(bio, bind.c_str(), bind.size());
 	
     TiXmlElement bindresult("");
-    if (xmpp_read_packet(bio, xmppdat, &bindresult) != 0) {
+    if (xmpp_read_packet(bio, up, &bindresult) != 0) {
 		assert(0);
 		return -1;
     }
@@ -481,12 +481,11 @@ static int xmpp_session_stage(BIO *bio, struct xmpp_struct *xmppdat)
 		printf("local client jid: %s\n", jidText);
     }
 	
-    appstr session = xmpp_session(xmppdat);
-    count = BIO_write(bio, session.c_str(), session.size());
-    assert(count == session.size());
+    appstr session = xmpp_session(up);
+    flushout(bio, session.c_str(), session.size());
 	
     TiXmlElement sessresult("");
-    if (xmpp_read_packet(bio, xmppdat, &sessresult) != 0) {
+    if (xmpp_read_packet(bio, up, &sessresult) != 0) {
 		assert(0);
 		return -1;
     }
@@ -514,13 +513,12 @@ static appstr xmpp_presence()
 
 static int xmpp_online(BIO *bio)
 {
-    appstr presence =xmpp_presence();
-    size_t count = BIO_write(bio, presence.c_str(), presence.size());
-    assert(count == presence.size());
+    appstr presence = xmpp_presence();
+    flushout(bio, presence.c_str(), presence.size());
     return 0;
 }
 
-static int xmpp_message_stage(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *message)
+static int xmpp_message_stage(BIO *bio, struct xmpp_struct *up, TiXmlElement *message)
 {
     TiXmlElement &packet = *message;
     TiXmlElement *xmlMsgBody = packet.FirstChildElement("body");
@@ -555,7 +553,7 @@ XmppPacket::XmppPacket(const TiXmlElement &base)
 static std::map<appstr, XmppPacket> g_online_users;
 static std::map<appstr, XmppPacket> g_roster_users;
 
-static int xmpp_presence_stage(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *message)
+static int xmpp_presence_stage(BIO *bio, struct xmpp_struct *up, TiXmlElement *message)
 {
     TiXmlElement &packet = *message;
     const char *type = packet.Attribute("type");
@@ -626,7 +624,7 @@ static appstr xmpp_result(const char *id,  const char *from, const char *payload
     return text;
 }
 
-static int do_iq_service(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *message)
+static int do_iq_service(BIO *bio, struct xmpp_struct *up, TiXmlElement *message)
 {
     TiXmlElement *payload;
     payload = message->FirstChildElement();
@@ -637,7 +635,7 @@ static int do_iq_service(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *me
 			const char *id = message->Attribute("id");
 			const char *from = message->Attribute("from");
 			appstr response = xmpp_result(id, from, NULL);
-			xmpp_write(response.c_str(), response.size());
+			flushout(g_xmpp_bio, response.c_str(), response.size());
 		}
     }else if (!strcmp(xmlns, "stun-address")) {
 #if 0
@@ -656,7 +654,7 @@ static int do_iq_service(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *me
     return 0;
 }
 
-static int xmpp_iq_stage(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *message)
+static int xmpp_iq_stage(BIO *bio, struct xmpp_struct *up, TiXmlElement *message)
 {
 	const char *id;
 	const char *xmlns;
@@ -678,7 +676,7 @@ static int xmpp_iq_stage(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *me
 			break;
 		}
 		printf("type: %s, xmlns: %s\n", type, xmlns);
-		do_iq_service(bio, xmppdat, message);
+		do_iq_service(bio, up, message);
 		break;
 	case IQ_ERROR:
 	case IQ_RESULT:
@@ -700,10 +698,9 @@ static int xmpp_iq_stage(BIO *bio, struct xmpp_struct *xmppdat, TiXmlElement *me
     return 0;
 }
 
-static int xmpp_stage(struct xmpp_struct *xmppdat, const char *service)
+static int xmpp_stage(struct xmpp_struct *up, const char *service)
 {
 	int len;
-	int sent;
 	char buf[512];
 	char proxy_server[] = "192.168.42.129:1800";
 	/* char jabber_server[] = "alt1.xmpp.l.google.com:5222"; */
@@ -721,34 +718,32 @@ static int xmpp_stage(struct xmpp_struct *xmppdat, const char *service)
 		return 0;
     }
 
+	LOG_TAG = "PROXY";
 	len = sprintf(buf, "CONNECT %s HTTP/1.0\r\n\r\n", jabber_server);
-	fprintf(stderr, "[PROXY-TX] %s\n", buf);
-	sent = BIO_write(bio, buf, len);
-	assert(sent == len);
+	flushout(bio, buf, len);
+	LOG_TAG = "TRACE";
 
-	proxy_read_handshake(bio, xmppdat);
+	proxy_read_handshake(bio, up);
 
-    assert(xmppdat != NULL);
-    xmppdat->available = 0;
-	memset(&xmppdat->parser, 0, sizeof(xmppdat->parser));
-    if (xmpp_tls_stage(bio, xmppdat) != 0){
+    assert(up != NULL);
+    up->available = 0;
+	memset(&up->parser, 0, sizeof(up->parser));
+    if (xmpp_tls_stage(bio, up) != 0){
 		assert(0);
 		return -1;
     }
 
-	printf("LLLL\n");
     if (bio_tls_set(&bio) != 0) {
 		assert(0);
 		return -1;
     }
 
-	printf("LLLLL\n");
-    if (xmpp_sasl_stage(bio, xmppdat) != 0){
+    if (xmpp_sasl_stage(bio, up) != 0){
 		assert(0);
 		return -1;
     }
-	printf("LKLLLL\n");
-    if (xmpp_session_stage(bio, xmppdat) != 0){
+
+    if (xmpp_session_stage(bio, up) != 0){
 		assert(0);
 		return -1;
     }
@@ -763,15 +758,15 @@ static int xmpp_stage(struct xmpp_struct *xmppdat, const char *service)
 #if 1
     for (;;) {
        	TiXmlElement packet("");
-       	if (xmpp_read_packet(bio, xmppdat, &packet) != 0) {
+       	if (xmpp_read_packet(bio, up, &packet) != 0) {
 			break;
 		}
 		if (!strcmp(packet.Value(), "message")) {
-			xmpp_message_stage(bio, xmppdat, &packet);
+			xmpp_message_stage(bio, up, &packet);
 		}else if (!strcmp(packet.Value(), "presence")) {
-			xmpp_presence_stage(bio, xmppdat, &packet);
+			xmpp_presence_stage(bio, up, &packet);
 		}else if (!strcmp(packet.Value(), "iq")) {
-			xmpp_iq_stage(bio, xmppdat, &packet);
+			xmpp_iq_stage(bio, up, &packet);
        	}else {
 			packet.Print(stdout, -1);
 		}
@@ -841,11 +836,20 @@ static void xmpp_unregiq(size_t qid)
     g_iq_infos.erase(itoa(qid, iqbuff, 10));
 }
 
-static void xmpp_write(const void *buff, size_t count)
+static void flushout(BIO *iop, const void *buf, size_t len)
 {
-    printf("xmpp_write: %s\n", (const char *)buff);
-    size_t iocnt = BIO_write(g_xmpp_bio, buff, count);
-    assert(iocnt == count);
+	size_t count;
+
+    count = BIO_write(iop, buf, len);
+
+	if (LOG_WAY != LOG_OUT) {
+		fprintf(stderr, "\n[%s-TX]: ", LOG_TAG);
+		LOG_WAY = LOG_OUT;
+	}
+
+    fprintf(stderr, "%s", (const char *)buf);
+    assert(len == count);
+	return;
 }
 
 int xmpp_iq_get(appstr payload, const char *target, TiXmlElement *packet)
@@ -862,7 +866,7 @@ int xmpp_iq_get(appstr payload, const char *target, TiXmlElement *packet)
     iqstr = appstr(buff)+payload+"</iq>";
     tiny_event *event = create_tiny_event();
     xmpp_regiq(qid, event, packet, &result);
-    xmpp_write(iqstr.c_str(), iqstr.size());
+    flushout(g_xmpp_bio, iqstr.c_str(), iqstr.size());
 	wait_for_event(event, 10000);
     xmpp_unregiq(qid);
 	close_event(event);
