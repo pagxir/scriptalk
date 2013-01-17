@@ -144,7 +144,7 @@ tag_begin(struct xml_upp *up, const char *xmlstr)
 	str = bar_skip(str);
 
 	if (*str == '/') {
-		type = 0;
+		type = 2;
 		str++;
 	}
 
@@ -246,7 +246,7 @@ int main(int argc, char *argv[])
 			fclose(fp);
 
 			printf("[XML]: %s", doc_parse(&context, buf));
-			printf("error %d\n", context.error);
+			printf("error %d, type %d\n", context.error, context.last_type);
 		}
 	}
 	free(buf);

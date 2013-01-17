@@ -67,10 +67,12 @@ static int fillin(struct xmpp_struct *up, BIO *iop)
 	char *buf = up->buffer;
 	size_t avail = up->available;
 
+	fprintf(stderr, "\ninwait:\n");
 	assert(BUFSIZE > avail);
 	len = BIO_read(iop, buf + avail, BUFSIZE - avail);
 	if (len == 0) {
 		fprintf(stderr, "BIO_read error\n");
+		exit(-2);
 		return -1;
 	}
 
@@ -283,34 +285,55 @@ static int xmpp_read_packet(BIO *bio, struct xmpp_struct *up, TiXmlElement *pack
     int count = 0;
     const char *p = NULL;
     assert(up != NULL);
-    char *buffer = up->buffer;
+    char *buf = up->buffer;
 	
     TiXmlElement parser("");
-    p = parser.Parse(buffer, NULL, TIXML_ENCODING_UTF8);
-    if (p == NULL)
-        goto fill_buffer;
-    *packet = parser;
-    assert (up->available <= BUFSIZE);
-    up->available -= (p-buffer);
-    memmove(buffer, p, up->available+1);
-	LOG_WAY = LOG_NONE;
-    return 0;
-	
-fill_buffer:
-    for (;;) {
-       	TiXmlElement parser("");
-		fillin(up, bio);
-        p = parser.Parse(buffer, NULL, TIXML_ENCODING_UTF8);
-        if (p == NULL)
-            continue;
-		*packet = parser;
-        up->available -= (p - buffer);
-        memmove(buffer, p, up->available + 1);
-		LOG_WAY = LOG_NONE;
-        return 0;
-    }
+	up->parser.error = 0;
+	up->parser.last_type = 0;
+	up->parser.last_level = 0;
+	buf[up->available] = 0;
+	p = xml_parse(&up->parser, buf);
 
-    return -1;
+	if (up->parser.error == 0 &&
+			up->parser.last_type != 0 &&
+			up->parser.last_level == 0) {
+		parser.Parse(buf, NULL, TIXML_ENCODING_UTF8);
+		*packet = parser;
+
+		assert (up->available <= BUFSIZE);
+		up->available -= (p - buf);
+		memmove(buf, p, up->available + 1);
+		buf[up->available] = 0;
+		LOG_WAY = LOG_NONE;
+		return 0;
+	}
+
+	for ( ; ; ) {
+		TiXmlElement parser("");
+
+		fillin(up, bio);
+		up->parser.error = 0;
+		up->parser.last_type = 0;
+		up->parser.last_level = 0;
+		buf[up->available] = 0;
+		p = xml_parse(&up->parser, buf);
+
+		if (up->parser.error == 0 &&
+				up->parser.last_type != 0 &&
+				up->parser.last_level == 0) {
+			parser.Parse(buf, NULL, TIXML_ENCODING_UTF8);
+			*packet = parser;
+
+			assert (up->available <= BUFSIZE);
+			up->available -= (p - buf);
+			memmove(buf, p, up->available + 1);
+			buf[up->available] = 0;
+			LOG_WAY = LOG_NONE;
+			return 0;
+		}
+	}
+
+	return -1;
 }
 
 static int xmpp_tls_stage(BIO *bio, struct xmpp_struct *up)
@@ -404,6 +427,7 @@ static int xmpp_sasl_stage(BIO *bio, struct xmpp_struct *up)
 		assert(0);
 		return -1;
     }
+
     if (strcmp(authresult.Value(), "success")) {
 		assert(0);
 		return -1;
@@ -417,6 +441,7 @@ static int bio_tls_set(BIO **bio)
     *bio = BIO_new_ssl(xmpp_tlsctx(), 1);
 
     BIO_push(*bio, rawio);
+
     if (BIO_do_handshake(*bio) <= 0) {
         fprintf(stderr, "BIO_do_handshake failure\n");
         return -1;
@@ -681,7 +706,7 @@ static int xmpp_stage(struct xmpp_struct *up, const char *service)
 	int len;
 	char buf[512];
 	char proxy_server[] = "192.168.42.129:1800";
-#if 0
+#if 1
 	char jabber_server[] = "jabbernet.dk:5222";
 #else
 	char jabber_server[] = "alt1.xmpp.l.google.com:5222";
