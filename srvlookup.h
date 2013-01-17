@@ -3,7 +3,7 @@
 
 typedef std::string appstr;
 typedef std::vector<appstr> srvlist;
-size_t srvlookup(const char *srvstr, srvlist *result);
+int srvlookup(const char *srvstr, srvlist *result);
 
 #endif
 

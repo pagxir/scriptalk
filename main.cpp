@@ -48,8 +48,7 @@ int main(int argc, char *argv[])
 	slotwait_held(0);
 	initialize_modules(modules_list);
 
-	//XmppClient("level@jabbernet.dk", "wB0BVqHI");
-	XmppClient("pagxir@gmail.com", "LrTqS24IFKc6");
+	XmppClient("level@jabbernet.dk", "wB0BVqHI");
 	slotwait_start();
 	for ( ; slotwait_step(); ) {
 	}
