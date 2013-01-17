@@ -11,6 +11,12 @@ struct xml_upp {
 };
 
 const char *
+dec_parse(struct xml_upp *up, const char *xmlstr);
+
+const char *
+doc_parse(struct xml_upp *up, const char *xmlstr);
+
+const char *
 xml_parse(struct xml_upp *up, const char *xmlstr);
 
 const char *
