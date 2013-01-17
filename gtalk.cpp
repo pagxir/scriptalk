@@ -624,14 +624,20 @@ static int xmpp_stage(struct xmpp_struct *up, const char *service)
 {
 	int len;
 	char buf[512];
-	char proxy_server[] = "192.168.42.129:1800";
+
 #if 1
-	char jabber_server[] = "jabbernet.dk:5222";
+#define JABBER_SERVER "jabbernet.dk:5222"
 #else
-	char jabber_server[] = "alt1.xmpp.l.google.com:5222";
+#define JABBER_SERVER "alt1.xmpp.l.google.com:5222"
 #endif
 
-    BIO *bio = BIO_new_connect(proxy_server);
+#ifdef _USE_PROXY_
+	char target_server[] = "192.168.42.129:1800";
+#else
+	char target_server[] = JABBER_SERVER;
+#endif
+
+    BIO *bio = BIO_new_connect(target_server);
     if (bio == NULL) {
 		fprintf(stderr, "BIO_new_connect failed!\n");
 		return 0;
@@ -643,10 +649,12 @@ static int xmpp_stage(struct xmpp_struct *up, const char *service)
 		return 0;
     }
 
+#ifdef _USE_PROXY_
 	LOG_TAG = "PROXY";
 	len = sprintf(buf, "CONNECT %s HTTP/1.0\r\n\r\n", jabber_server);
 	flushout(bio, buf, len);
 	proxy_read_handshake(bio, up);
+#endif
 
 	LOG_TAG = "TRACE";
     assert(up != NULL);
