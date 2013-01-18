@@ -12,4 +12,4 @@ libwait/libwait.a:
 	$(MAKE) -C libwait
 
 clean:
-	$(RM) -rf *.o
+	$(RM) *.o

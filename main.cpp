@@ -33,12 +33,12 @@ struct module_stub timer_test_mod = {
 };
 
 extern struct module_stub timer_mod;
-//extern struct module_stub jabber_mod;
+extern struct module_stub jabber_mod;
 extern struct module_stub slotsock_mod;
 struct module_stub *modules_list[] = { 
 	&slotsock_mod, &timer_mod,
-	&timer_test_mod, NULL,
-	//&jabber_mod, NULL
+	&timer_test_mod, 
+	&jabber_mod, NULL
 };
 
 int XmppClient(const char *jid, const char *passwd);
