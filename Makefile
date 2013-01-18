@@ -1,4 +1,4 @@
-CXXFLAGS := -Ilibwait/include/ -DTIXML_USE_STL -D_USE_LIB_
+CXXFLAGS := -Ilibwait/include/ -DTIXML_USE_STL -D_USE_LIB_ -D_USE_PROXY_
 LDFLAGS  := -Llibwait
 LDLIBS   := -lwait -lrt -lpthread -lssl -lcrypto
 OBJECTS  := main.o gtalk.o tinyxml.o  \

@@ -67,7 +67,6 @@ static int fillin(struct xmpp_struct *up, BIO *iop)
 	char *buf = up->buffer;
 	size_t avail = up->available;
 
-	fprintf(stderr, "\ninwait:\n");
 	assert(BUFSIZE > avail);
 	len = BIO_read(iop, buf + avail, BUFSIZE - avail);
 	if (len == 0) {
@@ -651,7 +650,7 @@ static int xmpp_stage(struct xmpp_struct *up, const char *service)
 
 #ifdef _USE_PROXY_
 	LOG_TAG = "PROXY";
-	len = sprintf(buf, "CONNECT %s HTTP/1.0\r\n\r\n", jabber_server);
+	len = sprintf(buf, "CONNECT %s HTTP/1.0\r\n\r\n", JABBER_SERVER);
 	flushout(bio, buf, len);
 	proxy_read_handshake(bio, up);
 #endif
