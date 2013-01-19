@@ -10,6 +10,7 @@
 #include <wait/platform.h>
 #include <wait/module.h>
 #include <wait/slotwait.h>
+#include <wait/slotsock.h>
 #include <wait/callout.h>
 
 #include <map>
@@ -46,21 +47,6 @@ static SSL_CTX *get_tlsctx()
 		_sslctx = SSL_CTX_new(TLSv1_client_method());
 
     return _sslctx;
-}
-
-static int bio_tls_set(BIO **iop)
-{
-    BIO *rawio = *iop;
-    *iop = BIO_new_ssl(get_tlsctx(), 1);
-
-    BIO_push(*iop, rawio);
-
-    if (BIO_do_handshake(*iop) <= 0) {
-        fprintf(stderr, "BIO_do_handshake failure\n");
-        return -1;
-    }
-
-    return 0;
 }
 
 static char *strplit(char *str, char chr)
@@ -129,20 +115,16 @@ static void flushout(BIO *iop, const void *buf, size_t len)
 	return;
 }
 
-static int xmpp_online(BIO *iop)
-{
-    appstr presence = xmpp_presence();
-    flushout(iop, presence.c_str(), presence.size());
-    return 0;
-}
-
 class jabbercb {
 private:
-	BIO *g_xmpp_bio;
+	BIO *ssp;
+	int m_err;
+	char m_flags[64];
     const char *user;
     const char *domain;
     const char *resource;
     const char *password;
+	struct sockcb *sockcbp;
 
 private:
     size_t avail;
@@ -159,6 +141,8 @@ private:
 	appstr xmpp_session(void);
 
 private:
+	int xmpp_online(BIO *iop);
+	int bio_tls_set(BIO **iop);
 	int xmpp_tls_stage(BIO *bio);
 	int xmpp_sasl_stage(BIO *bio);
 	int xmpp_session_stage(BIO *bio);
@@ -191,7 +175,11 @@ jabbercb::jabbercb(const char *jid, const char *passwd)
     this->domain = host;
     this->resource = res;
     this->password = strdup(passwd);
+	memset(m_flags, 0, sizeof(m_flags));
 
+	ssp = NULL;
+	m_err = 0;
+	sockcbp = NULL;
 	waitcb_init(&sout, tc_callback, this);
 	waitcb_init(&sin, tc_callback, this);
 	return;
@@ -199,6 +187,8 @@ jabbercb::jabbercb(const char *jid, const char *passwd)
 
 jabbercb::~jabbercb()
 {
+	if (sockcbp != NULL)
+		sock_detach(sockcbp);
 	waitcb_clean(&sout);
 	waitcb_clean(&sin);
 	free((void *)password);
@@ -222,75 +212,85 @@ int jabbercb::run(void)
 	char target_server[] = JABBER_SERVER;
 #endif
 
-	BIO *bio = BIO_new_connect(target_server);
-	if (bio == NULL) {
-		fprintf(stderr, "BIO_new_connect failed!\n");
-		return 0;
+	if (!waitcb_active(&sout) &&
+			!waitcb_completed(&sout)) {
+		BIO *bio;
+		int fd, err;
+
+		bio = BIO_new_connect(target_server);
+		if (bio == NULL) {
+			fprintf(stderr, "BIO_new_connect failed!\n");
+			return 0;
+		}
+
+		BIO_set_nbio(bio, 1l);
+		err = BIO_do_connect(bio);
+		if (err <= 0 && !BIO_should_retry(bio)) {
+			fprintf(stderr, "BIO_do_connect failed!\n");
+			BIO_free_all(bio);
+			return 0;
+		}
+
+		fd = BIO_get_fd(bio, NULL);
+		sockcbp = sock_attach(fd);
+		if (err <= 0 && BIO_should_retry(bio)) {
+			fprintf(stderr, "BIO connect pending: %d!\n", fd);
+			sock_write_wait(sockcbp, &sout);
+		} else {
+			fprintf(stderr, "BIO connect OK!\n");
+			waitcb_switch(&sout);
+		}
+
+		ssp = bio;
 	}
 
-	if (BIO_do_connect(bio) <= 0) {
-		fprintf(stderr, "BIO_do_connect failed!\n");
-		BIO_free_all(bio);
-		return 0;
-	}
+	if (waitcb_completed(&sout)) {
 
 #ifdef _USE_PROXY_
-	LOG_TAG = "PROXY";
-	len = sprintf(buf, "CONNECT %s HTTP/1.0\r\n\r\n", JABBER_SERVER);
-	flushout(bio, buf, len);
-	proxy_read_handshake(bio);
+		LOG_TAG = "PROXY";
+		len = sprintf(buf, "CONNECT %s HTTP/1.0\r\n\r\n", JABBER_SERVER);
+		flushout(ssp, buf, len);
+		proxy_read_handshake(ssp);
+#error "_USE_PROXY_ not supported"
 #endif
 
-	LOG_TAG = "TRACE";
-	this->avail = 0;
-	memset(&parser, 0, sizeof(parser));
-	if (xmpp_tls_stage(bio) != 0){
-		assert(0);
-		return 0;
-	}
-
-	if (bio_tls_set(&bio) != 0) {
-		assert(0);
-		return 0;
-	}
-
-	if (xmpp_sasl_stage(bio) != 0){
-		assert(0);
-		return 0;
-	}
-
-	if (xmpp_session_stage(bio) != 0){
-		assert(0);
-		return 0;
-	}
 #if 0
-	appstr text = xmpp_roster(123);
-	BIO_write(bio, text.c_str(), text.size());
+		LOG_TAG = "TRACE";
+		this->avail = 0;
+		memset(&parser, 0, sizeof(parser));
 #endif
-	g_xmpp_bio = bio;
-	printf("[I]: login finish, into message loop:!\n");
-	xmpp_online(bio);
 
-	for (;;) {
-		TiXmlElement packet("");
-		if (xmpp_read_packet(bio, &packet) != 0) {
-			break;
-		}
+		xmpp_tls_stage(ssp);
+		bio_tls_set(&ssp);
+		xmpp_sasl_stage(ssp);
+		xmpp_session_stage(ssp);
+
 #if 0
-		if (!strcmp(packet.Value(), "message")) {
-			xmpp_message_stage(bio, &packet);
-		}else if (!strcmp(packet.Value(), "presence")) {
-			xmpp_presence_stage(bio, &packet);
-		}else if (!strcmp(packet.Value(), "iq")) {
-			xmpp_iq_stage(bio, &packet);
-		}else {
-			packet.Print(stdout, -1);
-		}
+		appstr text = xmpp_roster(123);
+		BIO_write(bio, text.c_str(), text.size());
 #endif
+		printf("[I]: login finish, into message loop:!\n");
+		xmpp_online(ssp);
+
+		if (m_flags[19] == 1) {
+			TiXmlElement packet("");
+			while (xmpp_read_packet(ssp, &packet) == 0);
+		}
+
+		if (m_err == 0 &&
+				!waitcb_active(&sin) &&
+				!waitcb_completed(&sin)) {
+			//fprintf(stderr, "sock_read_wait\n");
+			sock_read_wait(sockcbp, &sin);
+			return 1;
+		}
+
+		fprintf(stderr, "exit on failure\n");
+		return 0;
 	}
 
 	printf("[I]: all ok set\n");
-	return 0;
+	return 1;
 }
 
 void
@@ -307,36 +307,50 @@ jabbercb::tc_callback(void * up)
 	return;
 }
 
+int jabbercb::xmpp_online(BIO *iop)
+{
+	if (m_flags[18] == 1 && m_flags[19] == 0) {
+		appstr presence = xmpp_presence();
+		flushout(iop, presence.c_str(), presence.size());
+		m_flags[19] = 1;
+	}
+
+    return 0;
+}
+
 int jabbercb::fillin(BIO *iop)
 {
 	int len;
 	char *buf = this->buffer;
 	size_t avail = this->avail;
+	assert(avail < BUFSIZE);
 
-	assert(BUFSIZE > avail);
+	if (waitcb_completed(&sin)) {
+		len = BIO_read(iop, buf + avail, BUFSIZE - avail);
+		if (len == -1 && BIO_should_read(iop)) {
+			waitcb_clear(&sin);
+			return -1;
+		}
 
-	len = BIO_read(iop, buf + avail, BUFSIZE - avail);
-	if (len == 0) {
-		fprintf(stderr, "BIO_read error\n");
-		exit(-2);
-		return -1;
+		if (len == -1 || len == 0) {
+			fprintf(stderr, "BIO_read error\n");
+			m_err = 1;
+			return -1;
+		}
+
+		buf[avail + len] = 0;
+		this->avail = (avail + len);
+
+		if (LOG_WAY != LOG_IN) {
+			fprintf(stderr, "\n\n[%s-RX]: ", LOG_TAG, len);
+			LOG_WAY = LOG_IN;
+		}
+
+		fwrite(buf + avail, len, 1, stderr);
+		return 0;
 	}
 
-	if (len == -1) {
-		fprintf(stderr, "BIO_read failure\n");
-		return -1;
-	}
-
-	buf[avail + len] = 0;
-	this->avail = (avail + len);
-
-	if (LOG_WAY != LOG_IN) {
-		fprintf(stderr, "\n\n[%s-RX]: ", LOG_TAG);
-		LOG_WAY = LOG_IN;
-	}
-
-	fwrite(buf + avail, len, 1, stderr);
-	return 0;
+	return -1;
 }
 
 int jabbercb::xmpp_seek_handshake(void)
@@ -409,35 +423,13 @@ int jabbercb::xmpp_read_packet(BIO *bio, TiXmlElement *packet)
     const char *p = NULL;
     char *buf = this->buffer;
 	
-    TiXmlElement xmlparser("");
-	parser.error = 0;
-	parser.last_type = 0;
-	parser.last_level = 0;
-	buf[avail] = 0;
-	p = xml_parse(&parser, buf);
-
-	if (parser.error == 0 &&
-			parser.last_type != 0 &&
-			parser.last_level == 0) {
-		xmlparser.Parse(buf, NULL, TIXML_ENCODING_UTF8);
-		*packet = xmlparser;
-
-		assert (avail <= BUFSIZE);
-		avail -= (p - buf);
-		memmove(buf, p, avail + 1);
-		buf[avail] = 0;
-		LOG_WAY = LOG_NONE;
-		return 0;
-	}
-
-	for ( ; ; ) {
+	do {
 		TiXmlElement xmlparser("");
 
-		fillin(bio);
+		buf[avail] = 0;
 		parser.error = 0;
 		parser.last_type = 0;
 		parser.last_level = 0;
-		buf[avail] = 0;
 		p = xml_parse(&parser, buf);
 
 		if (parser.error == 0 &&
@@ -453,35 +445,72 @@ int jabbercb::xmpp_read_packet(BIO *bio, TiXmlElement *packet)
 			LOG_WAY = LOG_NONE;
 			return 0;
 		}
-	}
+	} while (fillin(bio) == 0);
 
 	return -1;
 }
 
+int jabbercb::bio_tls_set(BIO **iop)
+{
+	if (m_flags[4] == 1 && m_flags[5] == 0) {
+		BIO *rawio = *iop;
+		*iop = BIO_new_ssl(get_tlsctx(), 1);
+		BIO_push(*iop, rawio);
+		m_flags[5] = 1;
+	}
+
+	if (m_flags[5] == 1 && m_flags[6] == 0) {
+		if (BIO_do_handshake(*iop) > 0) {
+			fprintf(stderr, "BIO_do_handshake success\n");
+			m_flags[6] = 1;
+			return 0;
+		}
+		
+		if (!BIO_should_retry(*iop)) {
+			fprintf(stderr, "BIO_do_handshake failure\n");
+			m_err = 1;
+			return 0;
+		}
+
+		assert(!BIO_should_write(*iop));
+		waitcb_clear(&sin);
+	}
+
+	return 0;
+}
+
 int jabbercb::xmpp_tls_stage(BIO *bio)
 {
-    appstr handshake = xmpp_handshake(domain);
-	flushout(bio, handshake.c_str(), handshake.size());
+	int test;
+	const int OFF = 0;
+
+	if (m_flags[OFF + 0] == 0) {
+		appstr handshake = xmpp_handshake(domain);
+		flushout(bio, handshake.c_str(), handshake.size());
+		m_flags[OFF + 0] = 1;
+	}
 	
-    this->avail = 0;
-    if (xmpp_read_handshake(bio) != 0) {
-		assert(0);
-		return -1;
-    }
+	if (m_flags[OFF + 0] == 1 && m_flags[OFF + 1] == 0) {
+    	test = (xmpp_read_handshake(bio) == 0);
+		m_flags[OFF + 1] = test;
+	}
 	
-    TiXmlElement packet("");
-    if (xmpp_read_packet(bio, &packet) != 0) {
-		assert(0);
-		return -1;
-    }
+	if (m_flags[OFF + 1] == 1 && m_flags[OFF + 2] == 0) {
+    	TiXmlElement packet("");
+    	test = (xmpp_read_packet(bio, &packet) == 0);
+		m_flags[OFF + 2] = test;
+	}
+
+	if (m_flags[OFF + 2] == 1 && m_flags[OFF + 3] == 0) {
+    	appstr starttls = xmpp_starttls();
+		flushout(bio, starttls.c_str(), starttls.size());
+		m_flags[OFF + 3] = 1;
+	}
 	
-    appstr starttls = xmpp_starttls();
-	flushout(bio, starttls.c_str(), starttls.size());
-	
-    TiXmlElement proceed("");
-    if (xmpp_read_packet(bio, &proceed) != 0) {
-		assert(0);
-		return -1;
+	if (m_flags[OFF + 3] == 1 && m_flags[OFF + 4] == 0) {
+    	TiXmlElement proceed("");
+		test = (xmpp_read_packet(bio, &proceed) == 0);
+		m_flags[OFF + 4] = test;
     }
 
     return 0;
@@ -529,81 +558,112 @@ appstr jabbercb::xmpp_session(void)
 
 int jabbercb::xmpp_sasl_stage(BIO *bio)
 {
-    appstr handshake = xmpp_handshake(domain);
-	flushout(bio, handshake.c_str(), handshake.size());
-	
-    this->avail = 0;
-    if (xmpp_read_handshake(bio) != 0) {
-		assert(0);
-		return -1;
-    }
-	
-    TiXmlElement packet("");
-    if (xmpp_read_packet(bio, &packet) != 0) {
-		assert(0);
-		return -1;
-    }
-	
-    appstr sasl = xmpp_sasl();
-	flushout(bio, sasl.c_str(), sasl.size());
+	int test;
+	const int OFF = 7;
 
-    TiXmlElement authresult("");
-    if (xmpp_read_packet(bio, &authresult) != 0) {
-		assert(0);
-		return -1;
+	if (m_flags[6] == 1 && m_flags[OFF + 0] == 0) {
+    	appstr handshake = xmpp_handshake(domain);
+		flushout(bio, handshake.c_str(), handshake.size());
+		m_flags[OFF + 0] = 1;
+    	this->avail = 0;
+	}
+	
+	if (m_flags[OFF + 0] == 1 && m_flags[OFF + 1] == 0) {
+		test = (xmpp_read_handshake(bio) == 0);
+		m_flags[OFF + 1] = test;
     }
+	
+	if (m_flags[OFF + 1] == 1 && m_flags[OFF + 2] == 0) {
+    	TiXmlElement packet("");
+		test = (xmpp_read_packet(bio, &packet) == 0);
+		m_flags[OFF + 2] = test;
+	}
+	
+	if (m_flags[OFF + 2] == 1 && m_flags[OFF + 3] == 0) {
+    	appstr sasl = xmpp_sasl();
+		flushout(bio, sasl.c_str(), sasl.size());
+		m_flags[OFF + 3] = 1;
+	}
 
-    if (strcmp(authresult.Value(), "success")) {
-		assert(0);
-		return -1;
-    }
+	BIO_set_nbio(bio, 0);
+	if (m_flags[OFF + 3] == 1 && m_flags[OFF + 4] == 0) {
+		TiXmlElement authresult("");
+		test = (xmpp_read_packet(bio, &authresult) == 0);
+		m_flags[OFF + 4] = test;
+
+		if (test == 1 && strcmp(authresult.Value(), "success")) {
+			fprintf(stderr, "login failure!\n");
+			m_err = 1;
+			return -1;
+		}
+
+		fprintf(stderr, "wait packet\n");
+	}
+	BIO_set_nbio(bio, 1);
 
     return 0;
 }
 
 int jabbercb::xmpp_session_stage(BIO *bio)
 {
-    appstr handshake = xmpp_handshake(domain);
-	flushout(bio, handshake.c_str(), handshake.size());
+	int test;
+	const int OFF = 12;
 
-    if (xmpp_read_handshake(bio) != 0) {
-		assert(0);
-		return -1;
+	if (m_flags[11] == 1 && m_flags[OFF + 0] == 0) {
+    	appstr handshake = xmpp_handshake(domain);
+		flushout(bio, handshake.c_str(), handshake.size());
+		m_flags[OFF + 0] = 1;
+    	this->avail = 0;
+	}
+	
+	if (m_flags[OFF + 0] == 1 && m_flags[OFF + 1] == 0) {
+		test = (xmpp_read_handshake(bio) == 0);
+		m_flags[OFF + 1] = test;
     }
 	
-    TiXmlElement packet("");
-    if (xmpp_read_packet(bio, &packet) != 0) {
-		assert(0);
-		return -1;
-    }
+	if (m_flags[OFF + 1] == 1 && m_flags[OFF + 2] == 0) {
+    	TiXmlElement packet("");
+		test = (xmpp_read_packet(bio, &packet) == 0);
+		m_flags[OFF + 2] = test;
+	}
 	
-    appstr bind = xmpp_bind();
-    flushout(bio, bind.c_str(), bind.size());
+	if (m_flags[OFF + 2] == 1 && m_flags[OFF + 3] == 0) {
+		appstr bind = xmpp_bind();
+		flushout(bio, bind.c_str(), bind.size());
+		m_flags[OFF + 3] = 1;
+	}
 	
-    TiXmlElement bindresult("");
-    if (xmpp_read_packet(bio, &bindresult) != 0) {
-		assert(0);
-		return -1;
-    }
-    const char *jidText = NULL;
-    TiXmlHandle hBindResult(&bindresult);
-    TiXmlElement *jidNode = hBindResult.FirstChildElement("bind").
-		FirstChildElement("jid").ToElement();
+	if (m_flags[OFF + 3] == 1 && m_flags[OFF + 4] == 0) {
+    	TiXmlElement packet("");
+		test = (xmpp_read_packet(bio, &packet) == 0);
+		m_flags[OFF + 4] = test;
 
-    if (jidNode != NULL && (jidText = jidNode->GetText())) {
-		printf("\n\n[I]: local client jid: %s\n", jidText);
-		LOG_WAY = LOG_NONE;
-    }
+		if (test != 0) {
+			const char *jidText = NULL;
+			TiXmlHandle hBindResult(&packet);
+			TiXmlElement *jidNode = hBindResult.FirstChildElement("bind").
+				FirstChildElement("jid").ToElement();
+
+			if (jidNode != NULL && (jidText = jidNode->GetText())) {
+				printf("\n\n[I]: local client jid: %s\n", jidText);
+				LOG_WAY = LOG_NONE;
+			}
+		}
+	}
 	
-    appstr session = xmpp_session();
-    flushout(bio, session.c_str(), session.size());
-	
-    TiXmlElement sessresult("");
-    if (xmpp_read_packet(bio, &sessresult) != 0) {
-		assert(0);
-		return -1;
-    }
-    return 0;
+	if (m_flags[OFF + 4] == 1 && m_flags[OFF + 5] == 0) {
+		appstr session = xmpp_session();
+		flushout(bio, session.c_str(), session.size());
+		m_flags[OFF + 5] = 1;
+	}
+
+	if (m_flags[OFF + 5] == 1 && m_flags[OFF + 6] == 0) {
+		TiXmlElement sessresult("");
+		test = (xmpp_read_packet(bio, &sessresult) == 0);
+		m_flags[OFF + 6] = test;
+	}
+
+	return 0;
 }
 
 int XmppClient(const char *jid, const char *passwd)
