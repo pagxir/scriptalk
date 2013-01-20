@@ -119,6 +119,7 @@ class jabbercb {
 private:
 	BIO *ssp;
 	int m_err;
+	int m_proxy;
 	char m_flags[64];
     const char *user;
     const char *domain;
@@ -179,6 +180,7 @@ jabbercb::jabbercb(const char *jid, const char *passwd)
 
 	ssp = NULL;
 	m_err = 0;
+	m_proxy = 0;
 	sockcbp = NULL;
 	waitcb_init(&sout, tc_callback, this);
 	waitcb_init(&sin, tc_callback, this);
@@ -247,17 +249,23 @@ int jabbercb::run(void)
 	if (waitcb_completed(&sout)) {
 
 #ifdef _USE_PROXY_
-		LOG_TAG = "PROXY";
-		len = sprintf(buf, "CONNECT %s HTTP/1.0\r\n\r\n", JABBER_SERVER);
-		flushout(ssp, buf, len);
-		proxy_read_handshake(ssp);
-#error "_USE_PROXY_ not supported"
-#endif
+		if ((m_proxy & 0x01) == 0) {
+			LOG_TAG = "PROXY";
+			if ((m_proxy & 0x02) == 0) {
+				len = sprintf(buf, "CONNECT %s HTTP/1.0\r\n\r\n", JABBER_SERVER);
+				flushout(ssp, buf, len);
+				m_proxy |= 0x02;
+			}
 
-#if 0
-		LOG_TAG = "TRACE";
-		this->avail = 0;
-		memset(&parser, 0, sizeof(parser));
+			if (proxy_read_handshake(ssp) != 0) {
+				fprintf(stderr, "proxy handshake not completed!\n");
+				goto fillin_entry;
+			}
+
+			fprintf(stderr, "proxy handshake completed: %ld!\n", this->avail);
+			LOG_TAG = "TRACE";
+			m_proxy |= 0x01;
+		}
 #endif
 
 		xmpp_tls_stage(ssp);
@@ -269,14 +277,15 @@ int jabbercb::run(void)
 		appstr text = xmpp_roster(123);
 		BIO_write(bio, text.c_str(), text.size());
 #endif
-		printf("[I]: login finish, into message loop:!\n");
 		xmpp_online(ssp);
 
 		if (m_flags[19] == 1) {
 			TiXmlElement packet("");
+			printf("[I]: login finish, into message loop:!\n");
 			while (xmpp_read_packet(ssp, &packet) == 0);
 		}
 
+fillin_entry:
 		if (m_err == 0 &&
 				!waitcb_active(&sin) &&
 				!waitcb_completed(&sin)) {
@@ -385,7 +394,7 @@ int jabbercb::proxy_seek_handshake(void)
 	s = strstr(p, "\r\n\r\n");
 	if (s != NULL) {
 		s += 4;
-		this->avail = (s - p);
+		this->avail -= (s - p);
 		memmove(buffer, s, s - p + 1);
 		return 0;
 	}
