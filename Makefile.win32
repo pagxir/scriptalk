@@ -1,0 +1,15 @@
+CXXFLAGS := -Ilibwait/include/ -DTIXML_USE_STL -D_USE_LIB_ -D_USE_PROXY_ -D_WIN32_ -I$(OPENSSL_DIR)\include
+LDFLAGS  := -Llibwait -L$(OPENSSL_DIR)\lib
+LDLIBS   := -lwait -llibeay32 -lssleay32 -lws2_32
+OBJECTS  := main.o gtalk.o tinyxml.o  \
+	tinyxmlerror.o tinyxmlparser.o \
+	srvlookup.o parser.o base64.o
+
+jxclient: $(OBJECTS) libwait/libwait.a
+	$(CXX) -o jxclient $(LDFLAGS) $(OBJECTS) $(LDLIBS)
+
+libwait/libwait.a:
+	$(MAKE) -C libwait
+
+clean:
+	$(RM) *.o
