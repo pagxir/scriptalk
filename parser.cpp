@@ -93,7 +93,7 @@ static const char *
 name_skip(const char *str)
 {
 	RETRUN_IF_NULL(str);
-	while (char_inset(*str++, "[A-Za-z0-9:]"));
+	while (char_inset(*str++, "[A-Za-z0-9:-]"));
 	return str - 1;
 }
 
